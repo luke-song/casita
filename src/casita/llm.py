@@ -391,15 +391,41 @@ def _html_to_markdown(html: str, *, max_chars: int = 12000) -> str:
     return (facts_section + md)[:max_chars]
 
 
-def _call_structured(
+class LLMUnavailable(RuntimeError):
+    """The model could not be consulted, so we have no answer — not an empty one.
+
+    `stage` says how far the call got, which is the part a reader needs in order
+    to act:
+
+      "config"  — no credentials configured; nothing was ever sent
+      "call"    — the request was sent and the API failed
+      "empty"   — the model answered with nothing
+      "parse"   — the model answered, but not in the shape we asked for
+
+    `evidence` is how much input was waiting on that answer, when the caller
+    knows it. "34 votes, unread" is a very different line than "0 votes".
+    """
+
+    def __init__(self, stage: str, detail: str, *, evidence: int | None = None):
+        self.stage = stage
+        self.detail = detail
+        self.evidence = evidence
+        super().__init__(f"{stage}: {detail}")
+
+
+def _call_structured_strict(
     model: str, system: str, prompt: str, schema: type[BaseModel],
     *, max_output_tokens: int | None = None,
-) -> BaseModel | None:
+) -> BaseModel:
+    """Like _call_structured, but says which of the four ways it failed.
+
+    A caller that can act on the difference between "the model said nothing"
+    and "we never reached the model" needs this one.
+    """
     try:
         client = _get_client()
     except RuntimeError as e:
-        print(f"  llm config err: {e}")
-        return None
+        raise LLMUnavailable("config", str(e)) from e
     # Don't cap output unless the caller insists. Gemini 2.5 supports 65k+ output
     # tokens; capping mid-response truncates JSON mid-string and the parser fails.
     config = gtypes.GenerateContentConfig(
@@ -412,11 +438,10 @@ def _call_structured(
     try:
         resp = client.models.generate_content(model=model, contents=prompt, config=config)
     except Exception as e:
-        print(f"  llm call err [{model}]: {e}")
-        return None
+        raise LLMUnavailable("call", f"[{model}] {e}") from e
     text = (resp.text or "").strip()
     if not text:
-        return None
+        raise LLMUnavailable("empty", f"[{model}] the model returned no text")
     try:
         return schema.model_validate_json(text)
     except Exception as e:
@@ -427,7 +452,25 @@ def _call_structured(
                 return schema.model_validate_json(m.group(0))
             except Exception:
                 pass
-        print(f"  llm parse err: {e}")
+        raise LLMUnavailable("parse", str(e)) from e
+
+
+def _call_structured(
+    model: str, system: str, prompt: str, schema: type[BaseModel],
+    *, max_output_tokens: int | None = None,
+) -> BaseModel | None:
+    """Lenient wrapper: same None as before, for callers that cannot act on why.
+
+    Four of the five call sites enrich one listing at a time and skip on
+    failure, which is the right behavior and does not need the distinction.
+    They keep it.
+    """
+    try:
+        return _call_structured_strict(
+            model, system, prompt, schema, max_output_tokens=max_output_tokens
+        )
+    except LLMUnavailable as e:
+        print(f"  llm {e.stage} err: {e.detail}")
         return None
 
 
@@ -995,6 +1038,7 @@ def analyze_preferences(conn: sqlite3.Connection) -> PrefAnalysis | None:
     ):
         rows.append(f'[PASS · {r["voter"] or "?"}] "{r["reason"]}"')
 
+    # The only honest None in this function: there is genuinely nothing to read.
     if not rows:
         return None
 
@@ -1002,5 +1046,12 @@ def analyze_preferences(conn: sqlite3.Connection) -> PrefAnalysis | None:
         "CURRENT RANKING POLICY:\n" + _RANK_SYSTEM + "\n\n"
         f"VOTES ({len(rows)} total, oldest first):\n" + "\n".join(rows)
     )
-    result = _call_structured(RANK_MODEL, _ANALYZE_PREFS_SYSTEM, prompt, PrefAnalysis)
+    try:
+        result = _call_structured_strict(
+            RANK_MODEL, _ANALYZE_PREFS_SYSTEM, prompt, PrefAnalysis
+        )
+    except LLMUnavailable as e:
+        # Carry the count. The caller's whole job is telling the reader that
+        # these rows exist and went unread.
+        raise LLMUnavailable(e.stage, e.detail, evidence=len(rows)) from e
     return result if isinstance(result, PrefAnalysis) else None
