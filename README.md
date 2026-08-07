@@ -13,6 +13,56 @@ This is not a product or service. It is published as-is, under MIT, as a
 personal-use codebase for an interview loop. The interesting part is what a
 candidate chooses to improve.
 
+## Why I chose this (fork note)
+
+Casita says *"we checked and found nothing"* and *"we could not check"* with
+the same words. Those two sentences should send a reader in opposite
+directions, and right now they send them the same way.
+
+`casita analyze-prefs` reads every vote and pass note, asks the model where the
+ranking policy contradicts what the reviewer actually did, and prints the
+contradictions. Run it on the shipped fixture with no credentials:
+
+```
+  llm config err: Set CASITA_GCP_PROJECT to use Vertex-backed LLM commands.
+no votes with reasons yet — nothing to analyze.
+```
+
+**The fixture holds 34 written reasons.** The tool read none of them, reported
+that none exist, and exited 0. Everyone who clones this repo without Vertex
+credentials runs into that line and concludes the feedback loop is empty. It is
+not empty. It is unreachable, and those two need different fixes.
+
+The heuristic score has the same problem one layer down. A missing laundry
+field and an apartment with no laundry both contribute zero, so the number
+cannot say which happened. On this fixture, parking goes unreported on 75 of
+143 listings and laundry on 73 — over half the page is scored on facts the
+listings never stated, and nothing said so.
+
+I picked this because it is the failure the docs could not warn me about.
+`docs/architecture.md` already lists the rough edges; taking one of those would
+only have shown that I can read a to-do list. This is where the system is
+confidently wrong rather than openly incomplete.
+
+### What I did not do
+
+`casita why` surfaced two things that are wrong for me and right for this repo.
+I left both alone.
+
+Rent is not a term in the scoring policy, so a $1,800 and a $9,000 apartment
+can tie. And the pet gate is written for two large dogs, so a cat-only listing
+takes -1000 and stops being scored at all. Both are correct for a tool built
+around one household's search, and `docs/index.md` says so plainly.
+
+Showing an assumption and overruling it are different acts, and in someone
+else's repo only the first one is mine to do. So the score reports them and
+does not touch them: **every listing scores exactly what it scored before** —
+143 listings, with and without the route matrix, 286 comparisons, zero
+differences.
+
+Start with `uv run casita why`.
+**[The full reasoning: docs/unknown-as-a-state.md](docs/unknown-as-a-state.md)**
+
 ## Demo
 
 The demo is credentials-free and uses a sanitized SQLite fixture with cached
