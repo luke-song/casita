@@ -21,6 +21,7 @@ nav = [
   { "Architecture" = "architecture.md" },
   { "Data Model" = "data-model.md" },
   { "Scraping" = "scraping.md" },
+  { "Unknown As A State" = "unknown-as-a-state.md" },
 ]
 
 [project.theme]
