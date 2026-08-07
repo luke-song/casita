@@ -14,7 +14,7 @@ from rich.table import Table
 from . import craigslist, dedup, html, llm, redfin, storage, walk, zillow, zumper
 from .browser import context
 from .models import Listing
-from .rank import rank, score
+from .rank import Scored, rank, score, score_detail
 
 console = Console()
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -1619,3 +1619,118 @@ def publisher_run(interval: int, debounce: int):
 
 def main() -> None:
     cli()
+
+
+def _term_line(term: str, points: int) -> str:
+    colour = "green" if points > 0 else ("red" if points < 0 else "dim")
+    return f"  {term:<20} [{colour}]{points:+d}[/{colour}]"
+
+
+def _print_listing_why(L: Listing, d: Scored) -> None:
+    head = f"[bold]{L.key}[/bold]"
+    if L.price:
+        head += f" — ${L.price:,}"
+    if L.hood:
+        head += f" · {L.hood}"
+    console.print(f"\n{head}")
+
+    if d.gated_on:
+        console.print(
+            f"score [red]{d.total}[/red] · gated on {d.gated_on} — "
+            f"no other term was evaluated"
+        )
+    else:
+        console.print(
+            f"score [bold]{d.total}[/bold] · "
+            f"{len(d.considered)} of {len(d.considered) + len(d.unknown)} terms informed"
+        )
+
+    if d.considered:
+        console.print("\n[bold]measured[/bold]")
+        for term, points in d.considered:
+            console.print(_term_line(term, points))
+
+    if d.gated_on:
+        console.print(f"\n[red]scoring stopped at the {d.gated_on} gate[/red]")
+        console.print(
+            "  beds, baths, laundry, parking and walk times were never "
+            "evaluated for this listing"
+        )
+    elif d.unknown:
+        console.print("\n[yellow]wanted to look, listing did not say[/yellow]")
+        for term in d.unknown:
+            console.print(f"  {term}")
+
+    if d.unscored:
+        console.print("\n[dim]not a term in this policy[/dim]")
+        for term in d.unscored:
+            console.print(f"  [dim]{term}[/dim]")
+
+
+def _print_coverage_summary(listings: list[Listing], walk_map: dict | None) -> None:
+    rows = [(L, score_detail(L, walk_map)) for L in listings]
+    known = sum(len(d.considered) for _, d in rows)
+    blind = sum(len(d.unknown) for _, d in rows)
+    console.print(
+        f"\n[bold]{len(listings)} active listings[/bold] — "
+        f"{known} of {known + blind} scoring terms informed, "
+        f"[yellow]{blind} unmeasured[/yellow]\n"
+    )
+
+    gaps: dict[str, int] = {}
+    for _, d in rows:
+        for term in d.unknown:
+            gaps[term] = gaps.get(term, 0) + 1
+    if gaps:
+        console.print("[yellow]most common gaps[/yellow]")
+        for term, n in sorted(gaps.items(), key=lambda kv: -kv[1]):
+            console.print(f"  {term:<20} missing on {n} of {len(listings)} listings")
+
+    # A gated listing has one measured term and looks, in the sorted output,
+    # like the most thoroughly rejected listing on the page.
+    thin = sorted(rows, key=lambda r: len(r[1].considered))[:5]
+    console.print("\n[bold]least informed scores[/bold]")
+    for L, d in thin:
+        if d.gated_on:
+            console.print(
+                f"  {L.key:<28} score [red]{d.total:>5}[/red]  "
+                f"gated on {d.gated_on} — no other term was evaluated"
+            )
+        else:
+            console.print(
+                f"  {L.key:<28} score {d.total:>5}  "
+                f"{len(d.considered)} of {len(d.considered) + len(d.unknown)} terms informed"
+            )
+    console.print(
+        "\n[dim]a score built on few terms is not a worse listing, "
+        "it is a less examined one.[/dim]"
+    )
+
+
+@cli.command()
+@click.option("--listing", help="Slug or key. Omit to summarize every active listing.")
+@click.option("--walk/--no-walk", "use_walk", default=True,
+              help="Include the route matrix. --no-walk shows the score without it.")
+@click.option("--local", is_flag=True, help="Skip GCS sync; operate on the local DB only.")
+def why(listing: str | None, use_walk: bool, local: bool):
+    """Break a heuristic score into what it saw, missed, and never looks at.
+
+    The score is one number, and one number cannot say whether a listing lost
+    a point or was never measured on that term.
+    """
+    with _cloud_or_local(local, read_only=True):
+        with storage.connect() as conn:
+            listings = storage.active_listings(conn)
+            walk_map = walk.populate_for(listings) if use_walk else None
+            if listing:
+                key = _lookup_listing_key(conn, listing)
+                if not key:
+                    console.print(f"[red]no listing matches {listing!r}[/red]")
+                    raise SystemExit(1)
+                match = next((L for L in listings if L.key == key), None)
+                if match is None:
+                    console.print(f"[red]{key} is not an active listing[/red]")
+                    raise SystemExit(1)
+                _print_listing_why(match, score_detail(match, walk_map))
+                return
+            _print_coverage_summary(listings, walk_map)
