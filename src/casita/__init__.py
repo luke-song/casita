@@ -1326,6 +1326,17 @@ def vote(listing: str, direction: str, reason: str | None, voter: str, local: bo
     console.print(f"[green]voted[/green] {direction} on {key} by {voter}")
 
 
+
+# What a reader has to do next depends on which of these it was, which is the
+# whole reason the stage is carried out of llm.py.
+_LLM_STAGE_BLURB = {
+    "config": "no Vertex credentials configured, so nothing was ever sent",
+    "call": "the request was sent and the API rejected it",
+    "empty": "the model was reached and answered with nothing",
+    "parse": "the model answered, but not in the shape the schema asked for",
+}
+
+
 @cli.command(name="analyze-prefs")
 @click.option("--local", is_flag=True, help="Skip GCS sync; operate on the local DB only.")
 def analyze_prefs(local: bool):
@@ -1335,10 +1346,21 @@ def analyze_prefs(local: bool):
     current `_RANK_SYSTEM`, and prints flagged contradictions + proposed new
     rules. Proposes only — hand-edit `src/casita/llm.py` and commit.
     """
-    with _cloud_or_local(local, read_only=True):
-        with storage.connect() as conn:
-            analysis = llm.analyze_preferences(conn)
+    try:
+        with _cloud_or_local(local, read_only=True):
+            with storage.connect() as conn:
+                analysis = llm.analyze_preferences(conn)
+    except llm.LLMUnavailable as e:
+        n = e.evidence or 0
+        console.print(
+            f"[red]could not audit the policy — {n} "
+            f"{'vote' if n == 1 else 'votes'} with reasons went unread.[/red]"
+        )
+        console.print(f"[dim]{_LLM_STAGE_BLURB.get(e.stage, e.stage)}: {e.detail}[/dim]")
+        console.print("[dim]this is not a finding about your votes. nothing was analyzed.[/dim]")
+        raise SystemExit(1) from None
 
+    # Reached only when the query really did come back empty.
     if not analysis:
         console.print("[yellow]no votes with reasons yet — nothing to analyze.[/yellow]")
         return
