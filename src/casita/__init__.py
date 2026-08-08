@@ -14,7 +14,7 @@ from rich.table import Table
 from . import craigslist, dedup, html, llm, redfin, storage, walk, zillow, zumper
 from .browser import context
 from .models import Listing
-from .rank import Scored, rank, score, score_detail
+from .rank import GATE_TERMS, Scored, rank, score, score_detail, terms_by_weight
 
 console = Console()
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -1667,7 +1667,32 @@ def _print_listing_why(L: Listing, d: Scored) -> None:
             console.print(f"  [dim]{term}[/dim]")
 
 
+def _print_policy_weights() -> None:
+    """What the policy is mostly about, before any listing is scored.
+
+    A reader whose life does not match the heaviest terms should be able to
+    learn that in one screen, rather than from a ranking that quietly scored
+    them on questions they never asked.
+    """
+    rows = terms_by_weight()
+    console.print("[bold]what this policy weighs most[/bold]")
+    for term, lo, hi in rows:
+        tag = "gate" if term in GATE_TERMS else ""
+        console.print(f"  {term:<20} {tag:<5} [dim]{lo:>5} … {hi:+d}[/dim]")
+
+    # Say what the shape means, but only when it is actually true of the table.
+    non_gate = [t for t in rows if t[0] not in GATE_TERMS]
+    if len(non_gate) >= 2 and all(t[0].startswith("walk") for t in non_gate[:2]):
+        console.print(
+            "\n[dim]after the gate, this is mostly a walkability score. "
+            "if you do not walk to these places, the two heaviest terms in "
+            "your ranking are not about you.[/dim]"
+        )
+
+
 def _print_coverage_summary(listings: list[Listing], walk_map: dict | None) -> None:
+    # What the policy is about comes before how much of it we could measure.
+    _print_policy_weights()
     rows = [(L, score_detail(L, walk_map)) for L in listings]
     known = sum(len(d.considered) for _, d in rows)
     blind = sum(len(d.unknown) for _, d in rows)
