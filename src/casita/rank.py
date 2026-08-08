@@ -134,6 +134,38 @@ def score(listing: Listing, walk_map: dict | None = None) -> int:
     return s
 
 
+# What each term can contribute, as the policy is written. This is a claim
+# about score(), so tests/test_term_weights.py probes score() with synthetic
+# listings and confirms every bound rather than trusting the table — a
+# hand-written weight table is exactly the kind of documentation that drifts
+# and then reports something nobody checked.
+TERM_WEIGHTS: dict[str, tuple[int, int]] = {
+    "dog policy": (-1000, 12),
+    "walk to Presidio": (-6, 30),
+    "walk to beach": (-3, 15),
+    "neighborhood": (0, 6),
+    "bathrooms": (0, 5),
+    "bedrooms": (0, 4),
+    "parking": (0, 4),
+    "laundry": (-2, 3),
+}
+
+GATE_TERMS = frozenset({"dog policy"})
+
+
+def terms_by_weight() -> list[tuple[str, int, int]]:
+    """(term, low, high), heaviest first, measured by how far the term can move a score.
+
+    The order is the answer to a question the score cannot answer on its own:
+    what is this policy mostly about?
+    """
+    return sorted(
+        ((term, lo, hi) for term, (lo, hi) in TERM_WEIGHTS.items()),
+        key=lambda t: t[2] - t[1],
+        reverse=True,
+    )
+
+
 def score_detail(listing: Listing, walk_map: dict | None = None) -> Scored:
     """`score()`, with the reasoning kept instead of thrown away.
 
