@@ -21,6 +21,27 @@ asks Gemini to return every listing with:
 The ranking policy keeps the personal assumptions: large dogs, SF walkability,
 Marin drive context, trail or beach access, and practical livability.
 
+## Reading A Score
+
+`score()` returns one integer, which cannot say whether a listing lost a point
+or was never measured on that term. `score_detail()` returns the same total
+plus three lists — `considered`, `unknown`, and `unscored` — and `casita why`
+renders them:
+
+```bash
+uv run casita why                    # coverage across every active listing
+uv run casita why --listing <slug>   # one listing, broken apart
+uv run casita why --no-walk          # the score without the route matrix
+```
+
+It opens with `TERM_WEIGHTS`, ordered by how far each term can move a score, so
+the policy's shape is legible before any listing is ranked. A reader whose life
+does not match the heaviest terms can see that immediately rather than infer it
+from a ranking.
+
+The totals are unchanged: `score_detail(...).total` equals `score(...)` for
+every fixture listing, with and without routes.
+
 ## Ways This Could Go Further
 
 Ranking is deliberately still prompt-centric and Vertex-only. A future version
