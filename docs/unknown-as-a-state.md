@@ -14,11 +14,20 @@ it scored before.
 
 `docs/architecture.md` lists real rough edges, and the ranking page has a "Ways
 This Could Go Further" note. Picking from either would have told you I can read
-a to-do list.
+a to-do list. A documented rough edge is *openly incomplete*; I went looking for
+the place where the system is *confidently wrong*, which the documentation
+cannot warn you about because it does not know it is there.
 
-I went looking instead for the place where the system is *confidently wrong*
-rather than openly incomplete — a bug the documentation cannot warn you about,
-because the documentation does not know it is there.
+I found it by using the tool rather than reading it. I have a cat, I live in San
+Jose, and I drive, so I pointed casita at my own search. The ranking came back
+looking reasonable — which it should not have, because the two heaviest terms in
+this policy are walking distances I will never use. Nothing in the output said
+so.
+
+My first answer was a preferences system. It silently rescored 106 of 143
+fixture listings while reporting nothing unusual, which is this same bug wearing
+my name, so I deleted it. The problem was never that the policy could not be
+changed. It was that the tool could not say what it did and did not know.
 
 Two things I reproduced, in order of how much they worried me.
 
