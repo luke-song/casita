@@ -14,6 +14,7 @@ from rich.table import Table
 from . import craigslist, dedup, html, llm, redfin, storage, walk, zillow, zumper
 from .browser import context
 from .models import Listing
+from .sources import ScrapeOutcome, sources_with_full_coverage
 from .rank import GATE_TERMS, Scored, rank, score, score_detail, terms_by_weight
 
 console = Console()
@@ -38,35 +39,36 @@ async def _scrape(
 ) -> tuple[list[Listing], list[str]]:
     """Return (ranked listings, succeeded_sources)."""
     listings: list[Listing] = []
-    succeeded: list[str] = []
+
+    outcomes: dict[str, ScrapeOutcome] = {}
+
+    def take(source: str, outcome: ScrapeOutcome) -> None:
+        """Collect one source's listings and record how much of it was read."""
+        outcomes[source] = outcome
+        listings.extend(outcome.listings)
+        console.print(f"  {source}: {outcome.summary()}")
+        if not outcome.complete:
+            console.print(
+                f"[yellow]{source}: not delisting — "
+                f"{len(outcome.blocked)} area(s) went unread this run[/yellow]"
+            )
+
     async with context(headless=headless) as ctx:
         console.print("[bold]scraping zillow…[/bold]")
-        z = await zillow.scrape_all(ctx)
-        if z:
-            succeeded.append("zillow")
-        listings.extend(z)
+        take("zillow", await zillow.scrape_all(ctx))
 
         console.print("[bold]scraping craigslist…[/bold]")
-        c = await craigslist.scrape(ctx)
-        if c:
-            succeeded.append("craigslist")
-        listings.extend(c)
+        take("craigslist", await craigslist.scrape(ctx))
 
         console.print("[bold]scraping zumper…[/bold]")
         try:
-            zu = await zumper.scrape_all(ctx)
-            if zu:
-                succeeded.append("zumper")
-            listings.extend(zu)
+            take("zumper", await zumper.scrape_all(ctx))
         except Exception as e:
             console.print(f"[yellow]zumper failed: {e}[/yellow]")
 
         console.print("[bold]scraping redfin…[/bold]")
         try:
-            rf = await redfin.scrape_all(ctx)
-            if rf:
-                succeeded.append("redfin")
-            listings.extend(rf)
+            take("redfin", await redfin.scrape_all(ctx))
         except Exception as e:
             console.print(f"[yellow]redfin failed: {e}[/yellow]")
 
@@ -90,7 +92,7 @@ async def _scrape(
     listings = dedup.dedupe(listings)
     if before != len(listings):
         console.print(f"[bold]dedup:[/bold] {before} → {len(listings)} listings")
-    return rank(listings), succeeded
+    return rank(listings), sources_with_full_coverage(outcomes)
 
 
 def _print_table(listings: list[Listing], limit: int = 25):
