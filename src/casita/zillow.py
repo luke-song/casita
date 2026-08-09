@@ -68,6 +68,7 @@ from . import cache, dogs
 from .geo import resolve_neighborhood
 from .locations import MARIN_CITY_SLUGS, SF_NEIGHBORHOOD_SLUGS
 from .models import Listing
+from .sources import ScrapeOutcome, SourceUnavailable
 
 NEIGHBORHOODS = {
     # San Francisco — Richmond / Sunset / Presidio-adjacent.
@@ -165,10 +166,12 @@ async def scrape(ctx: BrowserContext, neighborhood: str, url: str) -> list[Listi
     page = await ctx.new_page()
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # No __NEXT_DATA__ means the page came back without its result payload,
+        # which is what PerimeterX looks like from here. Not an empty market.
         try:
             await page.wait_for_selector("script#__NEXT_DATA__", state="attached", timeout=10000)
-        except Exception:
-            return []
+        except Exception as e:
+            raise SourceUnavailable(neighborhood, "blocked", str(e)) from e
         raw = await page.locator("script#__NEXT_DATA__").inner_text()
         data = json.loads(raw)
         results = _extract_results(data)
@@ -182,9 +185,9 @@ async def scrape(ctx: BrowserContext, neighborhood: str, url: str) -> list[Listi
         await page.close()
 
 
-async def scrape_all(ctx: BrowserContext) -> list[Listing]:
+async def scrape_all(ctx: BrowserContext) -> ScrapeOutcome:
     _validate_neighborhoods()
-    out: list[Listing] = []
+    outcome = ScrapeOutcome()
     for i, (neighborhood, url) in enumerate(NEIGHBORHOODS.items()):
         if i:
             # Space out the search-result pages too — back-to-back loads
@@ -192,11 +195,17 @@ async def scrape_all(ctx: BrowserContext) -> list[Listing]:
             await _pace(_NEIGHBORHOOD_DELAY, 3.0)
         try:
             results = await scrape(ctx, neighborhood, url)
-            print(f"  zillow/{neighborhood}: {len(results)} listings")
-            out.extend(results)
+        except SourceUnavailable as e:
+            print(f"  zillow/{neighborhood}: unread ({e.stage})")
+            outcome.miss(neighborhood, e.stage)
+            continue
         except Exception as e:
-            print(f"  zillow/{neighborhood}: ERROR {e}")
-    return out
+            print(f"  zillow/{neighborhood}: unread (error) {e}")
+            outcome.miss(neighborhood, "error")
+            continue
+        print(f"  zillow/{neighborhood}: {len(results)} listings")
+        outcome.record(neighborhood, results)
+    return outcome
 
 
 # ---------- detail-page enrichment ----------

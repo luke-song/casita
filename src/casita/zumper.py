@@ -19,6 +19,7 @@ from .browser import UA
 from .geo import resolve_neighborhood
 from .locations import MARIN_CITY_SLUGS, SF_NEIGHBORHOOD_SLUGS
 from .models import Listing
+from .sources import ScrapeOutcome, SourceUnavailable
 
 # Zumper stamps "BR/BA" titles for unnamed buildings — those add no signal
 # over the address, so we swap them out below.
@@ -132,14 +133,15 @@ async def scrape(ctx: BrowserContext, neighborhood: str, url: str) -> list[Listi
     try:
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        except Exception:
-            return []
+        except Exception as e:
+            raise SourceUnavailable(neighborhood, "load", str(e)) from e
         # Give React a beat to hydrate __PRELOADED_STATE__.
         await page.wait_for_timeout(1500)
+        # No __PRELOADED_STATE__ means the page never handed over its results.
         try:
             records = await _extract_listables(page)
-        except Exception:
-            return []
+        except Exception as e:
+            raise SourceUnavailable(neighborhood, "blocked", str(e)) from e
         listings: list[Listing] = []
         seen: set[str] = set()
         for rec in records:
@@ -157,20 +159,27 @@ async def scrape(ctx: BrowserContext, neighborhood: str, url: str) -> list[Listi
         await page.close()
 
 
-async def scrape_all(ctx: BrowserContext) -> list[Listing]:
+async def scrape_all(ctx: BrowserContext) -> ScrapeOutcome:
     _validate_neighborhoods()
+    outcome = ScrapeOutcome()
     seen: dict[str, Listing] = {}
     for neighborhood, url in NEIGHBORHOODS.items():
         try:
             results = await scrape(ctx, neighborhood, url)
-            print(f"  zumper/{neighborhood}: {len(results)} listings")
-            for L in results:
-                # Earlier neighborhood wins — the first hood we found it in is
-                # the canonical search context; nearby-match overlap is noise.
-                seen.setdefault(L.key, L)
+        except SourceUnavailable as e:
+            print(f"  zumper/{neighborhood}: unread ({e.stage})")
+            outcome.miss(neighborhood, e.stage)
+            continue
         except Exception as e:
-            print(f"  zumper/{neighborhood}: ERROR {e}")
-    return list(seen.values())
+            print(f"  zumper/{neighborhood}: unread (error) {e}")
+            outcome.miss(neighborhood, "error")
+            continue
+        print(f"  zumper/{neighborhood}: {len(results)} listings")
+        # Earlier neighborhood wins — the first hood we found it in is the
+        # canonical search context; nearby-match overlap is noise.
+        fresh = [L for L in results if seen.setdefault(L.key, L) is L]
+        outcome.record(neighborhood, fresh)
+    return outcome
 
 
 _PETS_RE = re.compile(r'"pets"\s*:\s*\[([^\]]*)\]')

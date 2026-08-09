@@ -66,10 +66,20 @@ goes unreported on 75 of 143 listings and laundry on 73 — over half the page i
 scored on facts the listings never stated. Nobody chose to ignore that; the
 number had no way to express it.
 
+And it happens a third time, where it costs the most. Each source searches
+several areas — Zillow and Zumper eight neighborhoods each. A bot wall stops
+one area at a time, and a stopped area returned `[]`, the same thing an area
+with nothing in it returns. `storage.upsert_run` reads that to decide which
+listings have left the market, guarded per source while the blocking is per
+area. One readable area was enough to mark every listing in the unread ones
+inactive. On a three-area source with two blocked, six of nine listings
+disappear — not because they were gone, but because nobody could look.
+
 That matters more here than it would in most tools, because the output is a
 list of places a person might live. A score built on facts that were never
 checked sends someone to spend a Saturday on the wrong apartment, or past the
-right one.
+right one. A listing deleted because a page timed out is one they never get to
+see at all.
 
 ### What I did not change
 

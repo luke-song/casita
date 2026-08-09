@@ -15,6 +15,7 @@ from . import cache, dogs
 from .geo import resolve_neighborhood
 from .locations import MARIN_SEARCH_TERMS, SF_SEARCH_TERMS
 from .models import Listing
+from .sources import ScrapeOutcome, SourceUnavailable
 
 SEARCH_URLS = [
     # SF apartments — filter to Richmond/Sunset target hoods below.
@@ -111,11 +112,21 @@ async def _extract_card(card) -> Listing | None:
     )
 
 
-async def scrape(ctx: BrowserContext) -> list[Listing]:
-    out: list[Listing] = []
+async def scrape(ctx: BrowserContext) -> ScrapeOutcome:
+    outcome = ScrapeOutcome()
     for url in SEARCH_URLS:
-        out.extend(await _scrape_one(ctx, url))
-    return out
+        try:
+            results = await _scrape_one(ctx, url)
+        except SourceUnavailable as e:
+            print(f"  craigslist/{e.area}: unread ({e.stage})")
+            outcome.miss(e.area, e.stage)
+            continue
+        except Exception as e:
+            print(f"  craigslist/{url}: unread (error) {e}")
+            outcome.miss(url, "error")
+            continue
+        outcome.record(url, results)
+    return outcome
 
 
 async def _scrape_one(ctx: BrowserContext, url: str) -> list[Listing]:
@@ -123,11 +134,12 @@ async def _scrape_one(ctx: BrowserContext, url: str) -> list[Listing]:
     out: list[Listing] = []
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # No result nodes means the page did not hand over its results. That
+        # is not the same as a search that legitimately matched nothing.
         try:
             await page.wait_for_selector(".cl-search-result", timeout=15000)
-        except Exception:
-            print("  craigslist: no results selector")
-            return []
+        except Exception as e:
+            raise SourceUnavailable(url, "blocked", str(e)) from e
         await page.wait_for_timeout(1500)
 
         # Trigger lazy-loaded images by scrolling the page to the bottom in steps.

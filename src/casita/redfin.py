@@ -19,6 +19,7 @@ from playwright.async_api import BrowserContext
 
 from .geo import resolve_neighborhood
 from .models import Listing
+from .sources import ScrapeOutcome, SourceUnavailable
 
 # Redfin rental search URLs. Filters live in the `/filter/` path segment:
 # 2-3 beds, dog-friendly. City id 17151 = San Francisco.
@@ -200,20 +201,21 @@ async def scrape(ctx: BrowserContext, area: str, url: str) -> list[Listing]:
     try:
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        except Exception:
-            return []
+        except Exception as e:
+            raise SourceUnavailable(area, "load", str(e)) from e
         # Wait for the server-rendered cards. If PerimeterX intercepts, this
-        # times out and we return [] — `casita solve`-cleared cookies prevent
-        # that on warm runs.
+        # times out — `casita solve`-cleared cookies prevent that on warm runs.
+        # An empty page here is a wall, not an empty market, so it is raised
+        # rather than returned as zero listings.
         try:
             await page.wait_for_selector(".bp-Homecard", timeout=20000)
-        except Exception:
-            return []
+        except Exception as e:
+            raise SourceUnavailable(area, "blocked", str(e)) from e
         await page.wait_for_timeout(800)
         try:
             payload = await page.evaluate(_EXTRACT_JS)
-        except Exception:
-            return []
+        except Exception as e:
+            raise SourceUnavailable(area, "parse", str(e)) from e
         records = payload.get("cards", [])
         geo_idx = _geo_index(payload.get("ld", []))
         listings: list[Listing] = []
@@ -233,14 +235,21 @@ async def scrape(ctx: BrowserContext, area: str, url: str) -> list[Listing]:
         await page.close()
 
 
-async def scrape_all(ctx: BrowserContext) -> list[Listing]:
+async def scrape_all(ctx: BrowserContext) -> ScrapeOutcome:
+    outcome = ScrapeOutcome()
     seen: dict[str, Listing] = {}
     for area, url in SEARCHES:
         try:
             results = await scrape(ctx, area, url)
-            print(f"  redfin/{area}: {len(results)} listings")
-            for L in results:
-                seen.setdefault(L.key, L)
+        except SourceUnavailable as e:
+            print(f"  redfin/{area}: unread ({e.stage})")
+            outcome.miss(area, e.stage)
+            continue
         except Exception as e:
-            print(f"  redfin/{area}: ERROR {e}")
-    return list(seen.values())
+            print(f"  redfin/{area}: unread (error) {e}")
+            outcome.miss(area, "error")
+            continue
+        print(f"  redfin/{area}: {len(results)} listings")
+        fresh = [L for L in results if seen.setdefault(L.key, L) is L]
+        outcome.record(area, fresh)
+    return outcome
